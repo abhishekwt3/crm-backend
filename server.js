@@ -495,6 +495,14 @@ app.delete('/api/organizations/:id', authenticateToken, async (req, res) => {
 // Get all team members
 app.get('/api/team', authenticateToken, async (req, res) => {
   try {
+    // First check if the user has an organization
+    if (!req.user.organisation_id) {
+      return res.status(400).json({ 
+        error: 'You must belong to an organization before managing team members',
+        code: 'NO_ORGANIZATION' 
+      });
+    }
+    
     let teamMembers;
     
     if (req.user.role === 'superadmin') {
@@ -503,6 +511,13 @@ app.get('/api/team', authenticateToken, async (req, res) => {
           organisation: {
             select: {
               organisation_name: true
+            }
+          },
+          user: {
+            select: {
+              id: true,
+              email: true,
+              role: true
             }
           }
         }
@@ -517,11 +532,19 @@ app.get('/api/team', authenticateToken, async (req, res) => {
             select: {
               organisation_name: true
             }
+          },
+          user: {
+            select: {
+              id: true,
+              email: true,
+              role: true
+            }
           }
         }
       });
     }
     
+    // Return empty array rather than error if no team members found
     res.status(200).json({ teamMembers });
   } catch (error) {
     console.error('Get team members error:', error);
@@ -567,8 +590,14 @@ app.get('/api/team/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     
+    // Check if ID is a valid number
+    const memberId = parseInt(id);
+    if (isNaN(memberId)) {
+      return res.status(400).json({ error: 'Invalid team member ID' });
+    }
+    
     const teamMember = await prisma.teamMember.findUnique({
-      where: { id: parseInt(id) },
+      where: { id: memberId },
       include: {
         organisation: {
           select: {
@@ -650,7 +679,7 @@ app.delete('/api/team/:id', authenticateToken, async (req, res) => {
         _count: {
           select: {
             deals: true,
-            notes: true,
+            discussions: true,
             meetings: true
           }
         }
@@ -669,15 +698,15 @@ app.delete('/api/team/:id', authenticateToken, async (req, res) => {
     // Check for associated data
     const totalAssociations = 
       existingTeamMember._count.deals + 
-      existingTeamMember._count.notes + 
+      existingTeamMember._count.discussions + 
       existingTeamMember._count.meetings;
     
     if (totalAssociations > 0) {
       return res.status(400).json({ 
-        error: 'Cannot delete team member with associated deals, notes, or meetings',
+        error: 'Cannot delete team member with associated deals, discussions, or meetings',
         associations: {
           deals: existingTeamMember._count.deals,
-          notes: existingTeamMember._count.notes,
+          discussions: existingTeamMember._count.discussions,
           meetings: existingTeamMember._count.meetings
         }
       });
@@ -1168,7 +1197,7 @@ include: {
   },
   _count: {
     select: {
-      notes: true,
+      discussions: true,
       meetings: true
     }
   }
@@ -1226,7 +1255,7 @@ data: {
 
 // If there's an initial note, create it
 if (initialNote) {
-await prisma.notesThread.create({
+await prisma.discussion.create({
   data: {
     deal_id: deal.id,
     comments: initialNote,
@@ -1264,7 +1293,7 @@ include: {
       team_member_name: true
     }
   },
-  notes: {
+  discussions: {
     include: {
       teamMember: {
         select: {
@@ -1383,7 +1412,7 @@ include: {
   },
   _count: {
     select: {
-      notes: true,
+      discussions: true,
       meetings: true
     }
   }
@@ -1399,14 +1428,14 @@ if (req.user.role !== 'superadmin' && existingDeal.property.organisation_id !== 
 return res.status(403).json({ error: 'You do not have permission to delete this deal' });
 }
 
-// Check if deal has associated notes or meetings
-const totalAssociations = existingDeal._count.notes + existingDeal._count.meetings;
+// Check if deal has associated discussions or meetings
+const totalAssociations = existingDeal._count.discussions + existingDeal._count.meetings;
 
 if (totalAssociations > 0) {
 return res.status(400).json({ 
-  error: 'Cannot delete deal with associated notes or meetings. Delete them first.',
+  error: 'Cannot delete deal with associated discussions or meetings. Delete them first.',
   associations: {
-    notes: existingDeal._count.notes,
+    discussions: existingDeal._count.discussions,
     meetings: existingDeal._count.meetings
   }
 });
@@ -1427,97 +1456,97 @@ res.status(500).json({ error: 'Failed to delete deal' });
 }
 });
 
-// NOTES ROUTES
+// DISCUSSIONS ROUTES
 
-// Get all notes for a deal
-app.get('/api/deals/:dealId/notes', authenticateToken, async (req, res) => {
-try {
-const { dealId } = req.params;
+// Get all discussions for a deal
+app.get('/api/deals/:dealId/discussions', authenticateToken, async (req, res) => {
+  try {
+    const { dealId } = req.params;
 
-// Check if user has permission to view notes for this deal
-const deal = await prisma.deal.findUnique({
-where: { id: parseInt(dealId) },
-include: {
-  property: {
-    select: { organisation_id: true }
-  }
-}
-});
+    // Check if user has permission to view discussions for this deal
+    const deal = await prisma.deal.findUnique({
+      where: { id: parseInt(dealId) },
+      include: {
+        property: {
+          select: { organisation_id: true }
+        }
+      }
+    });
 
-if (!deal) {
-return res.status(404).json({ error: 'Deal not found' });
-}
-
-if (req.user.role !== 'superadmin' && deal.property.organisation_id !== req.user.organisation_id) {
-return res.status(403).json({ error: 'You do not have permission to view notes for this deal' });
-}
-
-// Fetch notes
-const notes = await prisma.notesThread.findMany({
-where: { deal_id: parseInt(dealId) },
-include: {
-  teamMember: {
-    select: {
-      id: true,
-      team_member_name: true
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
     }
+
+    if (req.user.role !== 'superadmin' && deal.property.organisation_id !== req.user.organisation_id) {
+      return res.status(403).json({ error: 'You do not have permission to view discussions for this deal' });
+    }
+
+    // Fetch discussions
+    const discussions = await prisma.discussion.findMany({
+      where: { deal_id: parseInt(dealId) },
+      include: {
+        teamMember: {
+          select: {
+            id: true,
+            team_member_name: true
+          }
+        }
+      },
+      orderBy: {
+        timestamp: 'desc'
+      }
+    });
+
+    res.status(200).json({ discussions });
+  } catch (error) {
+    console.error('Get discussions error:', error);
+    res.status(500).json({ error: 'Failed to fetch discussions' });
   }
-},
-orderBy: {
-  timestamp: 'desc'
-}
 });
 
-res.status(200).json({ notes });
-} catch (error) {
-console.error('Get notes error:', error);
-res.status(500).json({ error: 'Failed to fetch notes' });
-}
-});
+// Create discussion for a deal
+app.post('/api/deals/:dealId/discussions', authenticateToken, async (req, res) => {
+  try {
+    const { dealId } = req.params;
+    const { comments } = req.body;
 
-// Create note for a deal
-app.post('/api/deals/:dealId/notes', authenticateToken, async (req, res) => {
-try {
-const { dealId } = req.params;
-const { comments } = req.body;
+    // Validate input
+    if (!comments) {
+      return res.status(400).json({ error: 'Comments are required' });
+    }
 
-// Validate input
-if (!comments) {
-return res.status(400).json({ error: 'Comments are required' });
-}
+    // Check if user has permission to add discussions to this deal
+    const deal = await prisma.deal.findUnique({
+      where: { id: parseInt(dealId) },
+      include: {
+        property: {
+          select: { organisation_id: true }
+        }
+      }
+    });
 
-// Check if user has permission to add notes to this deal
-const deal = await prisma.deal.findUnique({
-where: { id: parseInt(dealId) },
-include: {
-  property: {
-    select: { organisation_id: true }
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    if (req.user.role !== 'superadmin' && deal.property.organisation_id !== req.user.organisation_id) {
+      return res.status(403).json({ error: 'You do not have permission to add discussions to this deal' });
+    }
+
+    // Create discussion
+    const discussion = await prisma.discussion.create({
+      data: {
+        deal_id: parseInt(dealId),
+        comments,
+        team_member_id: req.user.teamMember?.id || null
+      }
+    });
+
+    res.status(201).json(discussion);
+  } catch (error) {
+    console.error('Create discussion error:', error);
+    res.status(500).json({ error: 'Failed to create discussion' });
   }
-}
-});
-
-if (!deal) {
-return res.status(404).json({ error: 'Deal not found' });
-}
-
-if (req.user.role !== 'superadmin' && deal.property.organisation_id !== req.user.organisation_id) {
-return res.status(403).json({ error: 'You do not have permission to add notes to this deal' });
-}
-
-// Create note
-const note = await prisma.notesThread.create({
-data: {
-  deal_id: parseInt(dealId),
-  comments,
-  team_member_id: req.user.teamMember?.id || null
-}
-});
-
-res.status(201).json(note);
-} catch (error) {
-console.error('Create note error:', error);
-res.status(500).json({ error: 'Failed to create note' });
-}
 });
 
 // MEETINGS ROUTES
@@ -2029,6 +2058,531 @@ status: 'ok',
 timestamp: new Date().toISOString(),
 env: process.env.NODE_ENV
 });
+});
+
+// Add this to server.js
+
+// TEAM INVITATION ROUTES
+
+// Install brevo package
+// npm install @getbrevo/brevo
+
+const Brevo = require('@getbrevo/brevo');
+
+// Invite a team member
+app.post('/api/team/invite', authenticateToken, async (req, res) => {
+  try {
+    const { team_member_name, team_member_email_id, role } = req.body;
+    
+    // Validate input
+    if (!team_member_name || !team_member_email_id) {
+      return res.status(400).json({ error: 'Name and email are required' });
+    }
+    
+    // Set organization from current user
+    const organisation_id = req.user.organisation_id;
+    
+    if (!organisation_id) {
+      return res.status(400).json({ error: 'You must be part of an organization to invite team members' });
+    }
+    
+    // Check if user can invite team members for this organization
+    if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+      return res.status(403).json({ error: 'You do not have permission to invite team members' });
+    }
+    
+    // Check if email already exists in the organization
+    const existingTeamMember = await prisma.teamMember.findFirst({
+      where: {
+        team_member_email_id,
+        organisation_id
+      }
+    });
+    
+    if (existingTeamMember) {
+      return res.status(400).json({ error: 'This email is already registered in your organization' });
+    }
+    
+    // Get organization details for the email
+    const organization = await prisma.organisation.findUnique({
+      where: { id: organisation_id }
+    });
+    
+    if (!organization) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+    
+    // Create team member record
+    const teamMember = await prisma.teamMember.create({
+      data: {
+        team_member_name,
+        team_member_email_id,
+        organisation_id
+      }
+    });
+    
+    // Generate invitation token (combine teamMember.id and organization.id)
+    const invitationToken = jwt.sign(
+      { 
+        teamMemberId: teamMember.id, 
+        organisationId: organisation_id,
+        email: team_member_email_id,
+        role: role || 'member',
+        type: 'invitation'
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    
+    // Create invitation URL
+    const invitationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/join?token=${invitationToken}`;
+    
+    // Send email via Brevo (formerly Sendinblue)
+    const defaultClient = Brevo.ApiClient.instance;
+    const apiKey = defaultClient.authentications['api-key'];
+    apiKey.apiKey = process.env.BREVO_API_KEY;
+    
+    const apiInstance = new Brevo.TransactionalEmailsApi();
+    const sender = {
+      email: process.env.SENDER_EMAIL || 'noreply@yourdomain.com',
+      name: process.env.SENDER_NAME || organization.organisation_name
+    };
+    
+    const receivers = [
+      {
+        email: team_member_email_id,
+        name: team_member_name
+      }
+    ];
+    
+    const emailParams = {
+      sender,
+      to: receivers,
+      subject: `Invitation to join ${organization.organisation_name}`,
+      htmlContent: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2>You've been invited to join ${organization.organisation_name}</h2>
+          <p>Hello ${team_member_name},</p>
+          <p>${req.user.email} has invited you to join their organization on CRM Dashboard.</p>
+          <div style="margin: 30px 0;">
+            <a href="${invitationUrl}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">
+              Accept Invitation
+            </a>
+          </div>
+          <p>This invitation link will expire in 7 days.</p>
+          <p>If you have any questions, please contact the person who invited you.</p>
+        </div>
+      `,
+      params: {
+        organizationName: organization.organisation_name,
+        inviterEmail: req.user.email,
+        inviteeEmail: team_member_email_id,
+        inviteeName: team_member_name
+      }
+    };
+    
+    try {
+      const result = await apiInstance.sendTransacEmail(emailParams);
+      console.log('Email sent successfully:', result);
+      
+      // Save the invitation record
+      await prisma.invitation.create({
+        data: {
+          email: team_member_email_id,
+          token: invitationToken,
+          team_member_id: teamMember.id,
+          organisation_id,
+          invited_by: req.user.id,
+          status: 'pending',
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
+        }
+      });
+      
+      res.status(200).json({
+        success: true,
+        message: 'Invitation sent successfully',
+        teamMember
+      });
+    } catch (emailError) {
+      console.error('Error sending invitation email:', emailError);
+      
+      // Still create the team member, but inform about email failure
+      res.status(207).json({
+        success: true,
+        emailSent: false,
+        message: 'Team member created but failed to send invitation email',
+        error: emailError.message,
+        teamMember
+      });
+    }
+  } catch (error) {
+    console.error('Team invitation error:', error);
+    res.status(500).json({ error: 'Failed to process invitation' });
+  }
+});
+
+// Verify invitation token and create user account
+app.post('/api/team/join', async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    
+    if (!token || !password) {
+      return res.status(400).json({ error: 'Token and password are required' });
+    }
+    
+    // Verify token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (tokenError) {
+      return res.status(401).json({ error: 'Invalid or expired invitation token' });
+    }
+    
+    // Check if it's an invitation token
+    if (!decoded.type || decoded.type !== 'invitation') {
+      return res.status(401).json({ error: 'Invalid token type' });
+    }
+    
+    // Check if team member exists
+    const teamMember = await prisma.teamMember.findFirst({
+      where: {
+        id: decoded.teamMemberId,
+        organisation_id: decoded.organisationId,
+        team_member_email_id: decoded.email
+      }
+    });
+    
+    if (!teamMember) {
+      return res.status(404).json({ error: 'Team member not found' });
+    }
+    
+    // Check if user already exists
+    let user = await prisma.user.findUnique({
+      where: { email: decoded.email }
+    });
+    
+    if (user) {
+      // User exists, check if already linked to this team member
+      if (user.organisation_id === decoded.organisationId) {
+        // Already in the organization, link to team member if not already
+        if (!teamMember.user_id) {
+          await prisma.teamMember.update({
+            where: { id: teamMember.id },
+            data: { user_id: user.id }
+          });
+        }
+        
+        // Generate token
+        const token = jwt.sign(
+          { 
+            id: user.id, 
+            email: user.email, 
+            role: user.role,
+            organisation_id: user.organisation_id
+          },
+          JWT_SECRET,
+          { expiresIn: '7d' }
+        );
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Account already exists, logged in successfully',
+          user: {
+            id: user.id,
+            email: user.email,
+            role: user.role
+          },
+          token
+        });
+      } else {
+        // User exists but in a different organization
+        return res.status(409).json({ 
+          error: 'Email already registered with a different organization',
+          canLogin: true
+        });
+      }
+    }
+    
+    // Hash password for new user
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Create new user
+    user = await prisma.user.create({
+      data: {
+        email: decoded.email,
+        password: hashedPassword,
+        role: decoded.role,
+        organisation_id: decoded.organisationId
+      }
+    });
+    
+    // Link user to team member
+    await prisma.teamMember.update({
+      where: { id: teamMember.id },
+      data: { user_id: user.id }
+    });
+    
+    // Update invitation status
+    await prisma.invitation.updateMany({
+      where: {
+        team_member_id: teamMember.id,
+        status: 'pending'
+      },
+      data: {
+        status: 'accepted',
+        accepted_at: new Date()
+      }
+    });
+    
+    // Generate token
+    const userToken = jwt.sign(
+      { 
+        id: user.id, 
+        email: user.email, 
+        role: user.role,
+        organisation_id: user.organisation_id
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    
+    res.status(201).json({
+      success: true,
+      message: 'Account created and joined organization successfully',
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role
+      },
+      token: userToken
+    });
+  } catch (error) {
+    console.error('Join organization error:', error);
+    res.status(500).json({ error: 'Failed to process join request' });
+  }
+});
+
+// Add this to server.js
+
+// Verify invitation token
+app.post('/api/team/verify-token', async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+    
+    // Verify token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (tokenError) {
+      return res.status(401).json({ error: 'Invalid or expired invitation token' });
+    }
+    
+    // Check if it's an invitation token
+    if (!decoded.type || decoded.type !== 'invitation') {
+      return res.status(401).json({ error: 'Invalid token type' });
+    }
+    
+    // Check if team member exists
+    const teamMember = await prisma.teamMember.findFirst({
+      where: {
+        id: decoded.teamMemberId,
+        organisation_id: decoded.organisationId,
+        team_member_email_id: decoded.email
+      },
+      include: {
+        organisation: {
+          select: {
+            organisation_name: true
+          }
+        }
+      }
+    });
+    
+    if (!teamMember) {
+      return res.status(404).json({ error: 'Team member not found' });
+    }
+    
+    // Check if user already exists and is linked to team member
+    if (teamMember.user_id) {
+      return res.status(400).json({ error: 'This invitation has already been accepted' });
+    }
+    
+    // Check if invitation exists and is still pending
+    const invitation = await prisma.invitation.findFirst({
+      where: {
+        team_member_id: teamMember.id,
+        status: 'pending',
+        expires_at: {
+          gte: new Date()
+        }
+      }
+    });
+    
+    if (!invitation) {
+      return res.status(400).json({ error: 'Invitation not found or has expired' });
+    }
+    
+    // Return token info
+    res.status(200).json({
+      success: true,
+      tokenInfo: {
+        name: teamMember.team_member_name,
+        email: teamMember.team_member_email_id,
+        organizationName: teamMember.organisation.organisation_name,
+        role: decoded.role
+      }
+    });
+  } catch (error) {
+    console.error('Verify invitation token error:', error);
+    res.status(500).json({ error: 'Failed to verify invitation token' });
+  }
+});
+
+// Resend invitation
+app.post('/api/team/invite/resend', authenticateToken, async (req, res) => {
+  try {
+    const { team_member_id } = req.body;
+    
+    // Validate input
+    if (!team_member_id) {
+      return res.status(400).json({ error: 'Team member ID is required' });
+    }
+    
+    // Get team member details
+    const teamMember = await prisma.teamMember.findUnique({
+      where: { id: parseInt(team_member_id) },
+      include: {
+        organisation: true,
+        user: {
+          select: {
+            id: true
+          }
+        }
+      }
+    });
+    
+    if (!teamMember) {
+      return res.status(404).json({ error: 'Team member not found' });
+    }
+    
+    // Check if user is authorized to resend invitation
+    if (req.user.role !== 'admin' && req.user.role !== 'superadmin' && req.user.organisation_id !== teamMember.organisation_id) {
+      return res.status(403).json({ error: 'You do not have permission to resend invitations for this organization' });
+    }
+    
+    // Check if team member already has a user account
+    if (teamMember.user) {
+      return res.status(400).json({ error: 'This team member has already accepted the invitation' });
+    }
+    
+    // Generate new invitation token
+    const invitationToken = jwt.sign(
+      { 
+        teamMemberId: teamMember.id, 
+        organisationId: teamMember.organisation_id,
+        email: teamMember.team_member_email_id,
+        role: 'member', // Default role
+        type: 'invitation'
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    
+    // Create invitation URL
+    const invitationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/join?token=${invitationToken}`;
+    
+    // Update or create invitation record
+    await prisma.invitation.updateMany({
+      where: {
+        team_member_id: teamMember.id,
+        status: 'pending'
+      },
+      data: {
+        status: 'expired'
+      }
+    });
+    
+    await prisma.invitation.create({
+      data: {
+        email: teamMember.team_member_email_id,
+        token: invitationToken,
+        team_member_id: teamMember.id,
+        organisation_id: teamMember.organisation_id,
+        invited_by: req.user.id,
+        status: 'pending',
+        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
+      }
+    });
+    
+    // Send email via Brevo
+    const defaultClient = Brevo.ApiClient.instance;
+    const apiKey = defaultClient.authentications['api-key'];
+    apiKey.apiKey = process.env.BREVO_API_KEY;
+    
+    const apiInstance = new Brevo.TransactionalEmailsApi();
+    const sender = {
+      email: process.env.SENDER_EMAIL || 'noreply@yourdomain.com',
+      name: process.env.SENDER_NAME || teamMember.organisation.organisation_name
+    };
+    
+    const receivers = [
+      {
+        email: teamMember.team_member_email_id,
+        name: teamMember.team_member_name
+      }
+    ];
+    
+    const emailParams = {
+      sender,
+      to: receivers,
+      subject: `Invitation Reminder: Join ${teamMember.organisation.organisation_name}`,
+      htmlContent: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2>Reminder: You've been invited to join ${teamMember.organisation.organisation_name}</h2>
+          <p>Hello ${teamMember.team_member_name},</p>
+          <p>${req.user.email} has invited you to join their organization on CRM Dashboard. We noticed you haven't accepted the invitation yet.</p>
+          <div style="margin: 30px 0;">
+            <a href="${invitationUrl}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">
+              Accept Invitation
+            </a>
+          </div>
+          <p>This invitation link will expire in 7 days.</p>
+          <p>If you have any questions, please contact the person who invited you.</p>
+        </div>
+      `,
+      params: {
+        organizationName: teamMember.organisation.organisation_name,
+        inviterEmail: req.user.email,
+        inviteeName: teamMember.team_member_name
+      }
+    };
+    
+    try {
+      const result = await apiInstance.sendTransacEmail(emailParams);
+      console.log('Reminder email sent successfully:', result);
+      
+      res.status(200).json({
+        success: true,
+        message: 'Invitation resent successfully'
+      });
+    } catch (emailError) {
+      console.error('Error sending invitation reminder email:', emailError);
+      
+      res.status(207).json({
+        success: true,
+        emailSent: false,
+        message: 'Failed to send invitation email',
+        error: emailError.message
+      });
+    }
+  } catch (error) {
+    console.error('Resend invitation error:', error);
+    res.status(500).json({ error: 'Failed to resend invitation' });
+  }
 });
 
 // Start server
