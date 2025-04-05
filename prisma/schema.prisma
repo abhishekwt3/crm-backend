@@ -1,0 +1,134 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organisation {
+  id               Int          @id @default(autoincrement())
+  organisation_name String
+  teamMembers      TeamMember[]
+  properties       Property[]
+  users            User[]
+  contacts         Contact[]
+}
+
+model User {
+  id             Int     @id @default(autoincrement())
+  email          String  @unique
+  password       String
+  role           String
+  organisation   Organisation? @relation(fields: [organisation_id], references: [id])
+  organisation_id Int?
+  teamMember     TeamMember?
+}
+
+model TeamMember {
+  id                  Int          @id @default(autoincrement())
+  organisation        Organisation @relation(fields: [organisation_id], references: [id])
+  organisation_id     Int
+  team_member_name    String
+  team_member_email_id String
+  user                User?        @relation(fields: [user_id], references: [id])
+  user_id             Int?         @unique
+  deals               Deal[]
+  notes               NotesThread[]
+  meetings            Meeting[]
+  tasks               Task[]
+  documents           Document[]
+}
+
+model Contact {
+  id              Int       @id @default(autoincrement())
+  name            String
+  email           String?
+  phone           String?
+  organisation    Organisation? @relation(fields: [organisation_id], references: [id])
+  organisation_id Int?
+  properties      Property[]
+}
+
+model Property {
+  id              Int         @id @default(autoincrement())
+  name            String
+  address         String?
+  owner           Contact?    @relation(fields: [owner_id], references: [id])
+  owner_id        Int?
+  organisation    Organisation @relation(fields: [organisation_id], references: [id])
+  organisation_id Int
+  status          String?
+  created_at      DateTime    @default(now())
+  deals           Deal[]
+  documents       Document[]
+}
+
+model Deal {
+  id          Int           @id @default(autoincrement())
+  name        String
+  property    Property?     @relation(fields: [property_id], references: [id])
+  property_id Int?
+  assignedTo  TeamMember?   @relation(fields: [assigned_to], references: [id])
+  assigned_to Int?
+  status      String
+  value       Float?
+  created_at  DateTime      @default(now())
+  updated_at  DateTime      @default(now()) @updatedAt
+  notes       NotesThread[]
+  meetings    Meeting[]
+  tasks       Task[]
+  documents   Document[]
+}
+
+model NotesThread {
+  id             Int        @id @default(autoincrement())
+  deal           Deal?      @relation(fields: [deal_id], references: [id])
+  deal_id        Int?
+  timestamp      DateTime   @default(now())
+  comments       String?
+  teamMember     TeamMember? @relation(fields: [team_member_id], references: [id])
+  team_member_id Int?
+}
+
+model Meeting {
+  id             Int        @id @default(autoincrement())
+  datetime       DateTime
+  deal           Deal?      @relation(fields: [deal_id], references: [id])
+  deal_id        Int?
+  teamMember     TeamMember? @relation(fields: [team_member_id], references: [id])
+  team_member_id Int?
+  title          String?
+  description    String?
+  location       String?
+}
+
+model Task {
+  id          Int         @id @default(autoincrement())
+  title       String
+  description String?
+  due_date    DateTime?
+  status      String
+  assignedTo  TeamMember? @relation(fields: [assigned_to], references: [id])
+  assigned_to Int?
+  deal        Deal?       @relation(fields: [deal_id], references: [id])
+  deal_id     Int?
+  created_at  DateTime    @default(now())
+}
+
+model Document {
+  id          Int         @id @default(autoincrement())
+  title       String
+  file_url    String
+  file_type   String?
+  uploadedBy  TeamMember? @relation(fields: [uploaded_by], references: [id])
+  uploaded_by Int?
+  deal        Deal?       @relation(fields: [deal_id], references: [id])
+  deal_id     Int?
+  property    Property?   @relation(fields: [property_id], references: [id])
+  property_id Int?
+  uploaded_at DateTime    @default(now())
+}
